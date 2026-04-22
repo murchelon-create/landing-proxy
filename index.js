@@ -9,6 +9,7 @@ app.use(express.json());
 // ───── CORS — разрешаем только лендинг ──────────────────────────────────────
 app.use(cors({
   origin: [
+    'https://buteyko-api.bothost.tech',
     'https://murchelon-create.github.io',
     'http://localhost:3000',
     'http://localhost:3001',
@@ -165,6 +166,7 @@ app.get('/health', (_, res) => {
 
 app.listen(PORT, () => {
   console.log(`[SERVER] Прокси запущен на порту ${PORT}`);
+  console.log(`[SERVER] URL:      https://buteyko-api.bothost.tech`);
   console.log(`[SERVER] Telegram: ${BOT_TOKEN ? '✅' : '❌ не задан'}`);
   console.log(`[SERVER] Sheets:   ${GOOGLE_SHEET_ID ? '✅' : '❌ не задан'}`);
 });
