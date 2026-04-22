@@ -6,7 +6,7 @@ import { google } from 'googleapis';
 const app = express();
 app.use(express.json());
 
-// ───── CORS ──────────────────────────────────────────────────────────────────────────────
+// ───── CORS ───────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: [
     'https://dyhanie-buteiko72.ru',
@@ -19,29 +19,27 @@ app.use(cors({
   methods: ['GET', 'POST'],
 }));
 
-// ───── Переменные окружения ───────────────────────────────────────────────────────────
-const BOT_TOKEN           = process.env.BOT_TOKEN;
-const ADMIN_ID            = process.env.ADMIN_ID;
-const GOOGLE_SHEET_ID     = process.env.GOOGLE_SHEET_ID;
-const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
-const PORT                = process.env.PORT || 3001;
+// ───── Переменные окружения ───────────────────────────────────────────────────
+const BOT_TOKEN        = process.env.BOT_TOKEN;
+const ADMIN_ID         = process.env.ADMIN_ID;
+const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
+const PORT             = process.env.PORT || 3001;
 
-// Обработка приватного ключа
-function parsePrivateKey(raw) {
-  if (!raw) return null;
-  // Удаляем пробелы после переноса (частая проблема при вставке)
-  const cleaned = raw.replace(/\n\s+/g, '\n').replace(/\\n/g, '\n');
-  return cleaned;
-}
-
-const GOOGLE_PRIVATE_KEY = parsePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
-
-// ───── Google Sheets авторизация ────────────────────────────────────────────────────
+// ───── Google Sheets авторизация через JSON целиком ───────────────────────────
 function getSheetsClient() {
-  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) return null;
-  const auth = new google.auth.JWT({
-    email: GOOGLE_CLIENT_EMAIL,
-    key: GOOGLE_PRIVATE_KEY,
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT;
+  if (!raw || !GOOGLE_SHEET_ID) return null;
+
+  let credentials;
+  try {
+    credentials = JSON.parse(raw);
+  } catch (e) {
+    console.error('[SHEETS] Не удалось распарсить GOOGLE_SERVICE_ACCOUNT:', e.message);
+    return null;
+  }
+
+  const auth = new google.auth.GoogleAuth({
+    credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   return google.sheets({ version: 'v4', auth });
@@ -72,10 +70,10 @@ async function ensurePurchasesSheet(sheets) {
   }
 }
 
-// ───── Записать заявку в Sheets ──────────────────────────────────────────────
+// ───── Записать заявку в Sheets ───────────────────────────────────────────────
 async function appendToSheets({ plan, contacts }) {
   const sheets = getSheetsClient();
-  if (!sheets || !GOOGLE_SHEET_ID) {
+  if (!sheets) {
     console.warn('[SHEETS] Не настроен — пропускаем запись');
     return;
   }
@@ -101,14 +99,12 @@ async function appendToSheets({ plan, contacts }) {
   console.log('[SHEETS] Запись добавлена:', plan.title);
 }
 
-// ───── Отправить Telegram-уведомление ────────────────────────────────────────
+// ───── Отправить Telegram-уведомление ─────────────────────────────────────────
 async function sendTelegram({ plan, contacts }) {
   if (!BOT_TOKEN || !ADMIN_ID) {
     console.warn('[TG] BOT_TOKEN или ADMIN_ID не заданы');
     return false;
   }
-
-  // Без parse_mode — простой текст, никаких ошибок Markdown
   const text = [
     `🛒 Заявка на покупку с лендинга`,
     ``,
@@ -126,7 +122,6 @@ async function sendTelegram({ plan, contacts }) {
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // parse_mode удалён — пользователь может вводить любые символы
       body: JSON.stringify({ chat_id: ADMIN_ID, text }),
     }
   );
@@ -164,6 +159,7 @@ app.get('/health', (_, res) => {
       bot:    !!BOT_TOKEN,
       admin:  !!ADMIN_ID,
       sheets: !!GOOGLE_SHEET_ID,
+      sa:     !!process.env.GOOGLE_SERVICE_ACCOUNT,
     },
   });
 });
@@ -173,4 +169,5 @@ app.listen(PORT, () => {
   console.log(`[SERVER] URL:      https://buteyko-api.bothost.tech`);
   console.log(`[SERVER] Telegram: ${BOT_TOKEN ? '✅' : '❌ не задан'}`);
   console.log(`[SERVER] Sheets:   ${GOOGLE_SHEET_ID ? '✅' : '❌ не задан'}`);
+  console.log(`[SERVER] SA JSON:  ${process.env.GOOGLE_SERVICE_ACCOUNT ? '✅' : '❌ не задан'}`);
 });
