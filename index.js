@@ -99,7 +99,7 @@ async function appendToSheets({ plan, contacts }) {
   console.log('[SHEETS] Запись добавлена:', plan.title);
 }
 
-// ───── Отправить Telegram-уведомление ─────────────────────────────────────────
+// ───── Отправить Telegram-уведомление (покупка) ───────────────────────────────
 async function sendTelegram({ plan, contacts }) {
   if (!BOT_TOKEN || !ADMIN_ID) {
     console.warn('[TG] BOT_TOKEN или ADMIN_ID не заданы');
@@ -130,6 +130,97 @@ async function sendTelegram({ plan, contacts }) {
   return data.ok;
 }
 
+// ───── Telegram уведомление о новом лиде ─────────────────────────────────────
+async function sendLeadTelegram(data) {
+  if (!BOT_TOKEN || !ADMIN_ID) return false;
+  const text = [
+    `📋 Новый лид с анкеты лендинга`,
+    ``,
+    `👤 Имя: ${data.name}`,
+    `📧 Email: ${data.email || '—'}`,
+    `📞 Телефон: ${data.phone || '—'}`,
+    ``,
+    `📊 Результат: ${data.profile || '—'}`,
+    `🎯 Сегмент: ${data.segment || '—'}`,
+    `⚡ Срочность: ${data.score || 0}/10`,
+    `🛠 Техника: ${data.tech || '—'}`,
+    ``,
+    `📝 Возраст: ${data.age_group || '—'}`,
+    `💼 Деятельность: ${data.occupation || '—'}`,
+    `🎯 Главная проблема: ${data.priority_problem || '—'}`,
+    `🏆 Цели: ${data.main_goals || '—'}`,
+  ].join('\n');
+
+  const res = await fetch(
+    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
+    }
+  );
+  const json = await res.json();
+  if (!json.ok) console.error('[TG-LEAD] Ошибка:', json.description);
+  return json.ok;
+}
+
+// ───── Запись лида в Sheet1 ───────────────────────────────────────────────────
+async function appendLeadToSheets(data) {
+  const sheets = getSheetsClient();
+  if (!sheets) return;
+
+  const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
+
+  // Проверить заголовки Sheet1, добавить если пусто
+  const meta = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'Sheet1!A1',
+  });
+  if (!meta.data.values) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: 'Sheet1!A1:T1',
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [['Дата', 'Имя', 'Email', 'Телефон', 'Сегмент', 'Срочность', 'Профиль', 'Техника',
+                  'Возраст', 'Деятельность', 'Активность', 'Проблемы', 'Стресс', 'Сон',
+                  'Гл.проблема', 'Дыхание', 'Опыт', 'Время', 'Форматы', 'Цели']],
+      },
+    });
+  }
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'Sheet1!A:T',
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [[
+        date,
+        data.name               || '',
+        data.email              || '',
+        data.phone              || '',
+        data.segment            || '',
+        data.score              || '',
+        data.profile            || '',
+        data.tech               || '',
+        data.age_group          || '',
+        data.occupation         || '',
+        data.physical_activity  || '',
+        data.current_problems   || '',
+        data.stress_level       || '',
+        data.sleep_quality      || '',
+        data.priority_problem   || '',
+        data.breathing_method   || '',
+        data.breathing_experience || '',
+        data.time_commitment    || '',
+        data.format_preferences || '',
+        data.main_goals         || '',
+      ]],
+    },
+  });
+  console.log('[SHEETS] Лид записан:', data.name);
+}
+
 // ───── POST /notify ───────────────────────────────────────────────────────────
 app.post('/notify', async (req, res) => {
   const { plan, contacts } = req.body;
@@ -148,6 +239,30 @@ app.post('/notify', async (req, res) => {
   if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:',   sheetsResult.reason?.message);
 
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
+});
+
+// ───── POST /notify-lead (лиды с анкеты) ─────────────────────────────────────
+app.post('/notify-lead', async (req, res) => {
+  const { name, email, phone, segment, score, profile, tech,
+          age_group, occupation, physical_activity, current_problems,
+          stress_level, sleep_quality, priority_problem, breathing_method,
+          breathing_frequency, shallow_breathing, stress_breathing,
+          breathing_experience, time_commitment, format_preferences,
+          main_goals, chronic_conditions,
+          child_age_detail, child_problems_detailed, child_motivation_approach } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ ok: false, error: 'Missing name' });
+  }
+
+  // Telegram уведомление
+  const tgResult = await Promise.allSettled([sendLeadTelegram(req.body)]);
+
+  // Запись в Sheet1
+  const sheetsResult = await Promise.allSettled([appendLeadToSheets(req.body)]);
+
+  const tgOk = tgResult[0].status === 'fulfilled' && tgResult[0].value === true;
+  res.json({ ok: tgOk, sheets: sheetsResult[0].status === 'fulfilled' });
 });
 
 // ───── GET /health ────────────────────────────────────────────────────────────
