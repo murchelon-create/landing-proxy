@@ -6,7 +6,7 @@ import { google } from 'googleapis';
 const app = express();
 app.use(express.json());
 
-// ───── CORS — разрешаем только лендинг ──────────────────────────────────────
+// ───── CORS ──────────────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: [
     'https://dyhanie-buteiko72.ru',
@@ -19,15 +19,25 @@ app.use(cors({
   methods: ['GET', 'POST'],
 }));
 
-// ───── Переменные окружения ──────────────────────────────────────────────────
-const BOT_TOKEN          = process.env.BOT_TOKEN;
-const ADMIN_ID           = process.env.ADMIN_ID;
-const GOOGLE_SHEET_ID    = process.env.GOOGLE_SHEET_ID;
+// ───── Переменные окружения ───────────────────────────────────────────────────────────
+const BOT_TOKEN           = process.env.BOT_TOKEN;
+const ADMIN_ID            = process.env.ADMIN_ID;
+const GOOGLE_SHEET_ID     = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
-const GOOGLE_PRIVATE_KEY  = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-const PORT               = process.env.PORT || 3001;
+const PORT                = process.env.PORT || 3001;
 
-// ───── Google Sheets авторизация ─────────────────────────────────────────────
+// Обрабатываем ключ: работаем и с \n как текстом, и с реальными переносами
+function parsePrivateKey(raw) {
+  if (!raw) return null;
+  // Если уже есть реальные переносы — оставляем как есть
+  if (raw.includes('\n')) return raw;
+  // Иначе заменяем экранированные \n на реальные
+  return raw.replace(/\\n/g, '\n');
+}
+
+const GOOGLE_PRIVATE_KEY = parsePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
+
+// ───── Google Sheets авторизация ────────────────────────────────────────────────────
 function getSheetsClient() {
   if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) return null;
   const auth = new google.auth.JWT({
@@ -38,7 +48,7 @@ function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// ───── Создать лист purchases если не существует ─────────────────────────────
+// ───── Создать лист purchases если не существует ──────────────────────────────
 async function ensurePurchasesSheet(sheets) {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: GOOGLE_SHEET_ID });
@@ -46,9 +56,7 @@ async function ensurePurchasesSheet(sheets) {
     if (!exists) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: GOOGLE_SHEET_ID,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title: 'purchases' } } }],
-        },
+        requestBody: { requests: [{ addSheet: { properties: { title: 'purchases' } } }] },
       });
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
@@ -81,8 +89,8 @@ async function appendToSheets({ plan, contacts }) {
     requestBody: {
       values: [[
         date,
-        plan.title      || '',
-        `${plan.price} ${plan.unit}` || '',
+        plan.title        || '',
+        `${plan.price} ${plan.unit}`,
         contacts.telegram || '',
         contacts.phone    || '',
         contacts.email    || '',
@@ -139,8 +147,7 @@ app.post('/notify', async (req, res) => {
   ]);
 
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
-
-  if (tgResult.status === 'rejected') console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
+  if (tgResult.status === 'rejected')  console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
   if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:', sheetsResult.reason?.message);
 
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
