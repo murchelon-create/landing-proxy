@@ -26,13 +26,12 @@ const GOOGLE_SHEET_ID     = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const PORT                = process.env.PORT || 3001;
 
-// Обрабатываем ключ: работаем и с \n как текстом, и с реальными переносами
+// Обработка приватного ключа
 function parsePrivateKey(raw) {
   if (!raw) return null;
-  // Если уже есть реальные переносы — оставляем как есть
-  if (raw.includes('\n')) return raw;
-  // Иначе заменяем экранированные \n на реальные
-  return raw.replace(/\\n/g, '\n');
+  // Удаляем пробелы после переноса (частая проблема при вставке)
+  const cleaned = raw.replace(/\n\s+/g, '\n').replace(/\\n/g, '\n');
+  return cleaned;
 }
 
 const GOOGLE_PRIVATE_KEY = parsePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
@@ -108,10 +107,12 @@ async function sendTelegram({ plan, contacts }) {
     console.warn('[TG] BOT_TOKEN или ADMIN_ID не заданы');
     return false;
   }
+
+  // Без parse_mode — простой текст, никаких ошибок Markdown
   const text = [
-    `🛒 *Заявка на покупку с лендинга*`,
+    `🛒 Заявка на покупку с лендинга`,
     ``,
-    `📦 Продукт: *${plan.title}*`,
+    `📦 Продукт: ${plan.title}`,
     `💰 Цена: ${plan.price} ${plan.unit}`,
     ``,
     `👤 Контакты:`,
@@ -125,7 +126,8 @@ async function sendTelegram({ plan, contacts }) {
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_ID, text, parse_mode: 'Markdown' }),
+      // parse_mode удалён — пользователь может вводить любые символы
+      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
     }
   );
   const data = await res.json();
@@ -147,8 +149,8 @@ app.post('/notify', async (req, res) => {
   ]);
 
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
-  if (tgResult.status === 'rejected')  console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
-  if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:', sheetsResult.reason?.message);
+  if (tgResult.status === 'rejected')     console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
+  if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:',   sheetsResult.reason?.message);
 
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
