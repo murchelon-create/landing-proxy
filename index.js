@@ -9,6 +9,8 @@ app.use(express.json());
 // ───── CORS — разрешаем только лендинг ──────────────────────────────────────
 app.use(cors({
   origin: [
+    'https://dyhanie-buteiko72.ru',
+    'https://www.dyhanie-buteiko72.ru',
     'https://buteyko-api.bothost.tech',
     'https://murchelon-create.github.io',
     'http://localhost:3000',
@@ -48,7 +50,6 @@ async function ensurePurchasesSheet(sheets) {
           requests: [{ addSheet: { properties: { title: 'purchases' } } }],
         },
       });
-      // Заголовки
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
         range: 'purchases!A1:H1',
@@ -132,7 +133,6 @@ app.post('/notify', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Missing plan.title or contacts.telegram' });
   }
 
-  // Параллельно: Telegram + Sheets
   const [tgResult, sheetsResult] = await Promise.allSettled([
     sendTelegram({ plan, contacts }),
     appendToSheets({ plan, contacts }),
@@ -140,14 +140,9 @@ app.post('/notify', async (req, res) => {
 
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
 
-  if (tgResult.status === 'rejected') {
-    console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
-  }
-  if (sheetsResult.status === 'rejected') {
-    console.error('[NOTIFY] Sheets error:', sheetsResult.reason?.message);
-  }
+  if (tgResult.status === 'rejected') console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
+  if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:', sheetsResult.reason?.message);
 
-  // Успех если хотя бы Telegram дошёл
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
