@@ -25,6 +25,107 @@ const ADMIN_ID         = process.env.ADMIN_ID;
 const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
 
+// ───── Нормализация — эталон из breathing-lead-bot ───────────────────────────
+
+const SEGMENT_LABELS = {
+  good:     'Без нарушений',
+  mild:     'Лёгкие нарушения',
+  moderate: 'Умеренные нарушения',
+  severe:   'Выраженные нарушения',
+};
+
+const VALUE_LABELS = {
+  '18-30':          '18–30 лет',
+  '31-45':          '31–45 лет',
+  '46-60':          '46–60 лет',
+  '60+':            '60+ лет',
+  'for_child':      'Заполняю для ребёнка',
+  'office_work':    'Офисная работа',
+  'home_work':      'Работа дома / фриланс',
+  'physical_work':  'Физический труд',
+  'student':        'Учёба',
+  'maternity_leave':'В декрете',
+  'retired':        'На пенсии',
+  'management':     'Руководящая должность',
+  'chronic_stress':       'Хронический стресс, напряжение',
+  'insomnia':             'Плохой сон, бессонница',
+  'breathing_issues':     'Одышка, нехватка воздуха',
+  'high_pressure':        'Повышенное давление',
+  'headaches':            'Частые головные боли',
+  'fatigue':              'Постоянная усталость',
+  'anxiety':              'Тревожность, панические атаки',
+  'concentration_issues': 'Проблемы с концентрацией',
+  'back_pain':            'Боли в шее, плечах, спине',
+  'digestion_issues':     'Проблемы с пищеварением',
+  'nose':     'В основном носом',
+  'mouth':    'Часто дышу ртом',
+  'mixed':    'Попеременно носом и ртом',
+  'unaware':  'Не обращаю внимания',
+  'constantly': 'Постоянно (каждый день)',
+  'often':      'Часто (несколько раз в неделю)',
+  'yes_often':  'Да, часто ловлю себя на этом',
+  'no':         'Нет, дышу нормально и глубоко',
+  'rapid_shallow':      'Учащается, становится поверхностным',
+  'breath_holding':     'Начинаю задерживать дыхание',
+  'air_shortage':       'Чувствую нехватку воздуха',
+  'mouth_breathing':    'Дышу ртом вместо носа',
+  'no_change':          'Не замечаю изменений',
+  'conscious_breathing':'Стараюсь дышать глубже',
+  'few_times':    'Пробовал(а) пару раз, не пошло',
+  'theory_only':  'Изучал(а) теорию, но не практиковал(а)',
+  'regularly':    'Практикую регулярно (несколько раз в неделю)',
+  'expert':       'Опытный практик (ежедневно)',
+  '3-5_minutes':   '3–5 минут',
+  '10-15_minutes': '10–15 минут',
+  '20-30_minutes': '20–30 минут',
+  '30+_minutes':   '30+ минут',
+  'video':       'Видеоуроки с демонстрацией',
+  'audio':       'Аудиопрактики с голосом',
+  'text':        'Текст с картинками',
+  'online_live': 'Живые онлайн-занятия',
+  'individual':  'Индивидуальные консультации',
+  'mobile_app':  'Мобильное приложение',
+  'quick_relaxation':   'Быстро расслабляться в стрессе',
+  'stress_resistance':  'Повысить стрессоустойчивость',
+  'reduce_anxiety':     'Избавиться от тревожности и паники',
+  'improve_sleep':      'Наладить качественный сон',
+  'increase_energy':    'Повысить энергию и работоспособность',
+  'normalize_pressure': 'Нормализовать давление/пульс',
+  'improve_breathing':  'Улучшить работу лёгких и дыхания',
+  'improve_focus':      'Улучшить концентрацию внимания',
+  'weight_management':  'Поддержать процесс похудения',
+  'general_health':     'Общее оздоровление организма',
+  'respiratory_diseases':   'Астма / бронхит / ХОБЛ',
+  'cardiovascular_diseases':'Гипертония / аритмия',
+  'diabetes':               'Диабет 1 или 2 типа',
+  'spine_problems':         'Остеохондроз / грыжи',
+  'chronic_headaches':      'Мигрени / головные боли',
+  'panic_disorder':         'Панические атаки / ВСД',
+  'thyroid_diseases':       'Заболевания щитовидной железы',
+  'digestive_diseases':     'Гастрит / язва / рефлюкс',
+  'none':                   'Нет хронических заболеваний',
+};
+
+// Перевод одного или массива значений
+function translateValue(val) {
+  if (Array.isArray(val)) return val.map(v => VALUE_LABELS[v] || v).join(', ');
+  if (typeof val === 'number') return String(val);
+  return VALUE_LABELS[val] || val || '';
+}
+
+// Форматирование шкалы 0–10 → "05/10"
+function formatScale(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const num = Number(value);
+  if (isNaN(num)) return String(value);
+  return `${String(num).padStart(2, '0')}/10`;
+}
+
+// Нормализация сегмента → человекочитаемый вид
+function normalizeSegment(segment) {
+  return SEGMENT_LABELS[String(segment || '').toLowerCase()] || segment || '';
+}
+
 // ───── Google Sheets авторизация через JSON целиком ───────────────────────────
 function getSheetsClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT;
@@ -70,7 +171,7 @@ async function ensurePurchasesSheet(sheets) {
   }
 }
 
-// ───── Записать заявку в Sheets ───────────────────────────────────────────────
+// ───── Записать заявку (покупку) в Sheets ─────────────────────────────────────
 async function appendToSheets({ plan, contacts }) {
   const sheets = getSheetsClient();
   if (!sheets) {
@@ -133,6 +234,7 @@ async function sendTelegram({ plan, contacts }) {
 // ───── Telegram уведомление о новом лиде ─────────────────────────────────────
 async function sendLeadTelegram(data) {
   if (!BOT_TOKEN || !ADMIN_ID) return false;
+
   const text = [
     `📋 Новый лид с анкеты лендинга`,
     ``,
@@ -141,14 +243,13 @@ async function sendLeadTelegram(data) {
     `📞 Телефон: ${data.phone || '—'}`,
     ``,
     `📊 Результат: ${data.profile || '—'}`,
-    `🎯 Сегмент: ${data.segment || '—'}`,
-    `⚡ Срочность: ${data.score || 0}/10`,
-    `🛠 Техника: ${data.tech || '—'}`,
+    `🎯 Сегмент: ${normalizeSegment(data.segment)}`,
+    `⚡ Срочность: ${formatScale(data.score)}`,
     ``,
-    `📝 Возраст: ${data.age_group || '—'}`,
-    `💼 Деятельность: ${data.occupation || '—'}`,
-    `🎯 Главная проблема: ${data.priority_problem || '—'}`,
-    `🏆 Цели: ${data.main_goals || '—'}`,
+    `📝 Возраст: ${translateValue(data.age_group)}`,
+    `💼 Деятельность: ${translateValue(data.occupation)}`,
+    `🎯 Главная проблема: ${translateValue(data.priority_problem)}`,
+    `🏆 Цели: ${translateValue(data.main_goals)}`,
   ].join('\n');
 
   const res = await fetch(
@@ -164,29 +265,38 @@ async function sendLeadTelegram(data) {
   return json.ok;
 }
 
-// ───── Запись лида в Sheet1 ───────────────────────────────────────────────────
+// ───── Запись лида в Sheet1 (эталон: breathing-lead-bot/lead_transfer.js) ─────
+const SHEET1_HEADERS = [
+  'Дата', 'Источник', 'Имя', 'Телефон', 'Email',
+  'Сегмент', 'Счёт', 'Профиль',
+  'Возраст', 'Деятельность', 'Стресс', 'Сон',
+  'Тип дыхания', 'Опыт практик', 'Проблемы',
+  'Главная проблема', 'Цели', 'Время', 'Форматы', 'Хр. заболевания',
+];
+
 async function appendLeadToSheets(data) {
   const sheets = getSheetsClient();
   if (!sheets) return;
 
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
 
-  // Проверить заголовки Sheet1, добавить если пусто
+  // Проверить заголовки Sheet1, выставить если пусто
   const meta = await sheets.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEET_ID,
-    range: 'Sheet1!A1',
+    range: 'Sheet1!A1:T1',
   });
-  if (!meta.data.values) {
+  const existingHeaders = meta.data.values?.[0] || [];
+  const needsHeaders = existingHeaders.length === 0 ||
+    SHEET1_HEADERS.some((h, i) => existingHeaders[i] !== h);
+
+  if (needsHeaders) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
       range: 'Sheet1!A1:T1',
       valueInputOption: 'RAW',
-      requestBody: {
-        values: [['Дата', 'Имя', 'Email', 'Телефон', 'Сегмент', 'Срочность', 'Профиль', 'Техника',
-                  'Возраст', 'Деятельность', 'Активность', 'Проблемы', 'Стресс', 'Сон',
-                  'Гл.проблема', 'Дыхание', 'Опыт', 'Время', 'Форматы', 'Цели']],
-      },
+      requestBody: { values: [SHEET1_HEADERS] },
     });
+    console.log('[SHEETS] Заголовки Sheet1 обновлены');
   }
 
   await sheets.spreadsheets.values.append({
@@ -196,25 +306,25 @@ async function appendLeadToSheets(data) {
     requestBody: {
       values: [[
         date,
-        data.name               || '',
-        data.email              || '',
-        data.phone              || '',
-        data.segment            || '',
-        data.score              || '',
-        data.profile            || '',
-        data.tech               || '',
-        data.age_group          || '',
-        data.occupation         || '',
-        data.physical_activity  || '',
-        data.current_problems   || '',
-        data.stress_level       || '',
-        data.sleep_quality      || '',
-        data.priority_problem   || '',
-        data.breathing_method   || '',
-        data.breathing_experience || '',
-        data.time_commitment    || '',
-        data.format_preferences || '',
-        data.main_goals         || '',
+        'landing',
+        data.name                           || '',
+        data.phone                          || '',
+        data.email                          || '',
+        normalizeSegment(data.segment),
+        formatScale(data.score),
+        data.profile                        || '',
+        translateValue(data.age_group),
+        translateValue(data.occupation),
+        formatScale(data.stress_level),
+        formatScale(data.sleep_quality),
+        translateValue(data.breathing_method),
+        translateValue(data.breathing_experience),
+        translateValue(data.current_problems),
+        translateValue(data.priority_problem),
+        translateValue(data.main_goals),
+        translateValue(data.time_commitment),
+        translateValue(data.format_preferences),
+        translateValue(data.chronic_conditions),
       ]],
     },
   });
@@ -241,28 +351,24 @@ app.post('/notify', async (req, res) => {
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
-// ───── POST /notify-lead (лиды с анкеты) ─────────────────────────────────────
+// ───── POST /notify-lead (лиды с анкеты лендинга) ────────────────────────────
 app.post('/notify-lead', async (req, res) => {
-  const { name, email, phone, segment, score, profile, tech,
-          age_group, occupation, physical_activity, current_problems,
-          stress_level, sleep_quality, priority_problem, breathing_method,
-          breathing_frequency, shallow_breathing, stress_breathing,
-          breathing_experience, time_commitment, format_preferences,
-          main_goals, chronic_conditions,
-          child_age_detail, child_problems_detailed, child_motivation_approach } = req.body;
+  const { name } = req.body;
 
   if (!name) {
     return res.status(400).json({ ok: false, error: 'Missing name' });
   }
 
-  // Telegram уведомление
-  const tgResult = await Promise.allSettled([sendLeadTelegram(req.body)]);
+  const [tgResult, sheetsResult] = await Promise.allSettled([
+    sendLeadTelegram(req.body),
+    appendLeadToSheets(req.body),
+  ]);
 
-  // Запись в Sheet1
-  const sheetsResult = await Promise.allSettled([appendLeadToSheets(req.body)]);
+  const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
+  if (tgResult.status === 'rejected')     console.error('[NOTIFY-LEAD] Telegram error:', tgResult.reason?.message);
+  if (sheetsResult.status === 'rejected') console.error('[NOTIFY-LEAD] Sheets error:',   sheetsResult.reason?.message);
 
-  const tgOk = tgResult[0].status === 'fulfilled' && tgResult[0].value === true;
-  res.json({ ok: tgOk, sheets: sheetsResult[0].status === 'fulfilled' });
+  res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
 // ───── GET /health ────────────────────────────────────────────────────────────
