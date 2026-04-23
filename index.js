@@ -25,13 +25,21 @@ const ADMIN_ID         = process.env.ADMIN_ID;
 const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
 
-// ───── Нормализация — эталон из breathing-lead-bot ───────────────────────────
+// ───── Сегменты — единый формат для бота и лендинга ─────────────────────────
+// Лендинг присылает: mild / moderate / severe / good
+// Бот присылает:     HOT_LEAD / WARM_LEAD / COLD_LEAD
+// Оба источника → один читаемый формат с эмодзи
 
 const SEGMENT_LABELS = {
-  good:     'Без нарушений',
-  mild:     'Лёгкие нарушения',
-  moderate: 'Умеренные нарушения',
-  severe:   'Выраженные нарушения',
+  // Ключи с лендинга
+  severe:   '🔥 Горячий — выраженные нарушения',
+  moderate: '🌱 Тёплый — умеренные нарушения',
+  mild:     '❄️ Холодный — лёгкие нарушения',
+  good:     '✅ Без нарушений',
+  // Ключи с бота (на случай если бот тоже пойдёт через прокси)
+  HOT_LEAD:  '🔥 Горячий — выраженные нарушения',
+  WARM_LEAD: '🌱 Тёплый — умеренные нарушения',
+  COLD_LEAD: '❄️ Холодный — лёгкие нарушения',
 };
 
 const VALUE_LABELS = {
@@ -71,6 +79,9 @@ const VALUE_LABELS = {
   'mouth_breathing':    'Дышу ртом вместо носа',
   'no_change':          'Не замечаю изменений',
   'conscious_breathing':'Стараюсь дышать глубже',
+  'never':        'Никогда не практиковал(а)',
+  'rarely':       'Редко практикую',
+  'sometimes':    'Иногда практикую',
   'few_times':    'Пробовал(а) пару раз, не пошло',
   'theory_only':  'Изучал(а) теорию, но не практиковал(а)',
   'regularly':    'Практикую регулярно (несколько раз в неделю)',
@@ -95,6 +106,7 @@ const VALUE_LABELS = {
   'improve_focus':      'Улучшить концентрацию внимания',
   'weight_management':  'Поддержать процесс похудения',
   'general_health':     'Общее оздоровление организма',
+  'reduce_stress':      'Снизить уровень стресса',
   'respiratory_diseases':   'Астма / бронхит / ХОБЛ',
   'cardiovascular_diseases':'Гипертония / аритмия',
   'diabetes':               'Диабет 1 или 2 типа',
@@ -129,9 +141,10 @@ function formatScore(value) {
   return `${num}/100`;
 }
 
-// Нормализация сегмента → человекочитаемый вид
+// Нормализация сегмента — работает для обоих источников
 function normalizeSegment(segment) {
-  return SEGMENT_LABELS[String(segment || '').toLowerCase()] || segment || '';
+  const key = String(segment || '');
+  return SEGMENT_LABELS[key] || SEGMENT_LABELS[key.toLowerCase()] || segment || '';
 }
 
 // ───── Google Sheets авторизация через JSON целиком ───────────────────────────
@@ -273,7 +286,7 @@ async function sendLeadTelegram(data) {
   return json.ok;
 }
 
-// ───── Запись лида в Sheet1 (эталон: breathing-lead-bot/lead_transfer.js) ─────
+// ───── Запись лида в Sheet1 ───────────────────────────────────────────────────
 const SHEET1_HEADERS = [
   'Дата', 'Источник', 'Имя', 'Телефон', 'Email',
   'Сегмент', 'Счёт', 'Профиль',
@@ -288,7 +301,6 @@ async function appendLeadToSheets(data) {
 
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
 
-  // Проверить заголовки Sheet1, выставить если пусто
   const meta = await sheets.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: 'Sheet1!A1:T1',
