@@ -26,17 +26,11 @@ const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
 
 // ───── Сегменты — единый формат для бота и лендинга ─────────────────────────
-// Лендинг присылает: mild / moderate / severe / good
-// Бот присылает:     HOT_LEAD / WARM_LEAD / COLD_LEAD
-// Оба источника → один читаемый формат с эмодзи
-
 const SEGMENT_LABELS = {
-  // Ключи с лендинга
   severe:   '🔥 Горячий — выраженные нарушения',
   moderate: '🌱 Тёплый — умеренные нарушения',
   mild:     '❄️ Холодный — лёгкие нарушения',
   good:     '✅ Без нарушений',
-  // Ключи с бота (на случай если бот тоже пойдёт через прокси)
   HOT_LEAD:  '🔥 Горячий — выраженные нарушения',
   WARM_LEAD: '🌱 Тёплый — умеренные нарушения',
   COLD_LEAD: '❄️ Холодный — лёгкие нарушения',
@@ -118,14 +112,12 @@ const VALUE_LABELS = {
   'none':                   'Нет хронических заболеваний',
 };
 
-// Перевод одного или массива значений
 function translateValue(val) {
   if (Array.isArray(val)) return val.map(v => VALUE_LABELS[v] || v).join(', ');
   if (typeof val === 'number') return String(val);
   return VALUE_LABELS[val] || val || '';
 }
 
-// Форматирование шкалы 0–10 → "05/10"
 function formatScale(value) {
   if (value === null || value === undefined || value === '') return '';
   const num = Number(value);
@@ -133,7 +125,6 @@ function formatScale(value) {
   return `${String(num).padStart(2, '0')}/10`;
 }
 
-// Форматирование индекса срочности 0–100 → "77/100"
 function formatScore(value) {
   if (value === null || value === undefined || value === '') return '';
   const num = Number(value);
@@ -141,10 +132,20 @@ function formatScore(value) {
   return `${num}/100`;
 }
 
-// Нормализация сегмента — работает для обоих источников
 function normalizeSegment(segment) {
   const key = String(segment || '');
   return SEGMENT_LABELS[key] || SEGMENT_LABELS[key.toLowerCase()] || segment || '';
+}
+
+// ───── Читаемые метки источников ─────────────────────────────────────────────
+const SOURCE_LABELS = {
+  'landing':         '🌐 Лендинг',
+  'bot_book_trial':  '🤖 Бот — пробное занятие',
+  'bot':             '🤖 Бот',
+};
+
+function sourceLabel(source) {
+  return SOURCE_LABELS[source] || source || 'landing';
 }
 
 // ───── Google Sheets авторизация через JSON целиком ───────────────────────────
@@ -192,8 +193,9 @@ async function ensurePurchasesSheet(sheets) {
   }
 }
 
-// ───── Записать заявку (покупку) в Sheets ─────────────────────────────────────
-async function appendToSheets({ plan, contacts }) {
+// ───── Записать заявку в Sheets ───────────────────────────────────────────────
+// source — необязательный параметр, по умолчанию 'landing'
+async function appendToSheets({ plan, contacts, source = 'landing' }) {
   const sheets = getSheetsClient();
   if (!sheets) {
     console.warn('[SHEETS] Не настроен — пропускаем запись');
@@ -213,22 +215,23 @@ async function appendToSheets({ plan, contacts }) {
         contacts.telegram || '',
         contacts.phone    || '',
         contacts.email    || '',
-        'landing',
+        source,           // ← теперь берём из запроса
         'новая',
       ]],
     },
   });
-  console.log('[SHEETS] Запись добавлена:', plan.title);
+  console.log('[SHEETS] Запись добавлена:', plan.title, '| источник:', source);
 }
 
-// ───── Отправить Telegram-уведомление (покупка) ───────────────────────────────
-async function sendTelegram({ plan, contacts }) {
+// ───── Отправить Telegram-уведомление (покупка/заявка) ───────────────────────
+async function sendTelegram({ plan, contacts, source = 'landing' }) {
   if (!BOT_TOKEN || !ADMIN_ID) {
     console.warn('[TG] BOT_TOKEN или ADMIN_ID не заданы');
     return false;
   }
   const text = [
-    `🛒 Заявка на покупку с лендинга`,
+    `🛒 Новая заявка`,
+    `📍 Источник: ${sourceLabel(source)}`,
     ``,
     `📦 Продукт: ${plan.title}`,
     `💰 Цена: ${plan.price} ${plan.unit}`,
@@ -353,15 +356,15 @@ async function appendLeadToSheets(data) {
 
 // ───── POST /notify ───────────────────────────────────────────────────────────
 app.post('/notify', async (req, res) => {
-  const { plan, contacts } = req.body;
+  const { plan, contacts, source = 'landing' } = req.body;
 
   if (!plan?.title || !contacts?.telegram) {
     return res.status(400).json({ ok: false, error: 'Missing plan.title or contacts.telegram' });
   }
 
   const [tgResult, sheetsResult] = await Promise.allSettled([
-    sendTelegram({ plan, contacts }),
-    appendToSheets({ plan, contacts }),
+    sendTelegram({ plan, contacts, source }),
+    appendToSheets({ plan, contacts, source }),
   ]);
 
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
