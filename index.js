@@ -121,6 +121,14 @@ function formatScale(value) {
   return `${String(num).padStart(2, '0')}/10`;
 }
 
+// Форматирование индекса срочности 0–100 → "77/100"
+function formatScore(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const num = Number(value);
+  if (isNaN(num)) return String(value);
+  return `${num}/100`;
+}
+
 // Нормализация сегмента → человекочитаемый вид
 function normalizeSegment(segment) {
   return SEGMENT_LABELS[String(segment || '').toLowerCase()] || segment || '';
@@ -244,7 +252,7 @@ async function sendLeadTelegram(data) {
     ``,
     `📊 Результат: ${data.profile || '—'}`,
     `🎯 Сегмент: ${normalizeSegment(data.segment)}`,
-    `⚡ Срочность: ${formatScale(data.score)}`,
+    `⚡ Срочность: ${formatScore(data.score)}`,
     ``,
     `📝 Возраст: ${translateValue(data.age_group)}`,
     `💼 Деятельность: ${translateValue(data.occupation)}`,
@@ -311,7 +319,7 @@ async function appendLeadToSheets(data) {
         data.phone                          || '',
         data.email                          || '',
         normalizeSegment(data.segment),
-        formatScale(data.score),
+        formatScore(data.score),
         data.profile                        || '',
         translateValue(data.age_group),
         translateValue(data.occupation),
