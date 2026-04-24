@@ -672,4 +672,16 @@ app.listen(PORT, () => {
   console.log(`[SERVER] BOT_OTZIV:   ${BOT_TOKEN_OTZIV ? '✅' : '❌ не задан'}`);
   console.log(`[SERVER] Sheets:      ${GOOGLE_SHEET_ID  ? '✅' : '❌ не задан'}`);
   console.log(`[SERVER] SA JSON:     ${process.env.GOOGLE_SERVICE_ACCOUNT ? '✅' : '❌ не задан'}`);
+
+  // Автоустановка webhook при старте
+  const WEBHOOK_URL = 'https://buteyko-api.bothost.tech/tg-webhook';
+  const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
+  if (token) {
+    fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${WEBHOOK_URL}`)
+      .then(r => r.json())
+      .then(d => console.log('[WEBHOOK] Установлен:', d.ok))
+      .catch(e => console.error('[WEBHOOK] Ошибка:', e.message));
+  } else {
+    console.log('[WEBHOOK] Токен не найден, webhook не установлен');
+  }
 });
