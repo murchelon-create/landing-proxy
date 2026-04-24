@@ -21,16 +21,15 @@ app.use(cors({
 
 // ───── Переменные окружения ───────────────────────────────────────────────────
 const BOT_TOKEN        = process.env.BOT_TOKEN;
-const BOT_TOKEN_OTZIV  = process.env.BOT_TOKEN_OTZIV;   // ← бот отзывов
+const BOT_TOKEN_OTZIV  = process.env.BOT_TOKEN_OTZIV;
 const ADMIN_ID         = process.env.ADMIN_ID;
 const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
 
 // ───── Сессии редактирования отзывов (в памяти) ───────────────────────────────
-// Map: adminId → { rowIndex }
 const editSessions = new Map();
 
-// ───── Сегменты — единый формат для бота и лендинга ─────────────────────────
+// ───── Сегменты ──────────────────────────────────────────────────────────────
 const SEGMENT_LABELS = {
   severe:   '🔥 Горячий — выраженные нарушения',
   moderate: '🌱 Тёплый — умеренные нарушения',
@@ -142,7 +141,6 @@ function normalizeSegment(segment) {
   return SEGMENT_LABELS[key] || SEGMENT_LABELS[key.toLowerCase()] || segment || '';
 }
 
-// ───── Читаемые метки источников ─────────────────────────────────────────────
 const SOURCE_LABELS = {
   'landing':         '🌐 Лендинг',
   'bot_book_trial':  '🤖 Бот — пробное занятие',
@@ -153,11 +151,10 @@ function sourceLabel(source) {
   return SOURCE_LABELS[source] || source || 'landing';
 }
 
-// ───── Google Sheets авторизация через JSON целиком ───────────────────────────
+// ───── Google Sheets авторизация ──────────────────────────────────────────────
 function getSheetsClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT;
   if (!raw || !GOOGLE_SHEET_ID) return null;
-
   let credentials;
   try {
     credentials = JSON.parse(raw);
@@ -165,7 +162,6 @@ function getSheetsClient() {
     console.error('[SHEETS] Не удалось распарсить GOOGLE_SERVICE_ACCOUNT:', e.message);
     return null;
   }
-
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -173,7 +169,7 @@ function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// ───── Создать лист purchases если не существует ──────────────────────────────
+// ───── Создать лист purchases ─────────────────────────────────────────────────
 async function ensurePurchasesSheet(sheets) {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: GOOGLE_SHEET_ID });
@@ -187,18 +183,15 @@ async function ensurePurchasesSheet(sheets) {
         spreadsheetId: GOOGLE_SHEET_ID,
         range: 'purchases!A1:H1',
         valueInputOption: 'RAW',
-        requestBody: {
-          values: [['Дата', 'Продукт', 'Цена', 'Telegram', 'Телефон', 'Email', 'Источник', 'Статус']],
-        },
+        requestBody: { values: [['Дата', 'Продукт', 'Цена', 'Telegram', 'Телефон', 'Email', 'Источник', 'Статус']] },
       });
-      console.log('[SHEETS] Лист purchases создан');
     }
   } catch (e) {
     console.error('[SHEETS] ensurePurchasesSheet error:', e.message);
   }
 }
 
-// ───── Создать лист reviews если не существует ────────────────────────────────
+// ───── Создать лист reviews ───────────────────────────────────────────────────
 async function ensureReviewsSheet(sheets) {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: GOOGLE_SHEET_ID });
@@ -216,20 +209,18 @@ async function ensureReviewsSheet(sheets) {
           values: [['Дата', 'Имя', 'Telegram', 'Оценка', 'Отзыв', 'Улучшение сна', 'Снижение стресса', 'Повышение энергии', 'Статус', 'Аватар URL', 'Фото URL']],
         },
       });
-      console.log('[SHEETS] Лист reviews создан');
     }
   } catch (e) {
     console.error('[SHEETS] ensureReviewsSheet error:', e.message);
   }
 }
 
-// ───── Записать отзыв в лист reviews, вернуть номер строки ───────────────────
+// ───── Записать отзыв в reviews ───────────────────────────────────────────────
 async function appendReviewToSheets(data) {
   const sheets = getSheetsClient();
   if (!sheets) return null;
   await ensureReviewsSheet(sheets);
 
-  // Узнаём сколько строк уже есть чтобы вернуть rowIndex
   const countRes = await sheets.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: 'reviews!A:A',
@@ -261,13 +252,10 @@ async function appendReviewToSheets(data) {
   return rowIndex;
 }
 
-// ───── Записать заявку в Sheets ───────────────────────────────────────────────
+// ───── Записать заявку ────────────────────────────────────────────────────────
 async function appendToSheets({ plan, contacts, source = 'landing' }) {
   const sheets = getSheetsClient();
-  if (!sheets) {
-    console.warn('[SHEETS] Не настроен — пропускаем запись');
-    return;
-  }
+  if (!sheets) return;
   await ensurePurchasesSheet(sheets);
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
   await sheets.spreadsheets.values.append({
@@ -287,15 +275,11 @@ async function appendToSheets({ plan, contacts, source = 'landing' }) {
       ]],
     },
   });
-  console.log('[SHEETS] Запись добавлена:', plan.title, '| источник:', source);
 }
 
-// ───── Отправить Telegram-уведомление (покупка/заявка) ───────────────────────
+// ───── Отправить уведомление о покупке ───────────────────────────────────────
 async function sendTelegram({ plan, contacts, source = 'landing' }) {
-  if (!BOT_TOKEN || !ADMIN_ID) {
-    console.warn('[TG] BOT_TOKEN или ADMIN_ID не заданы');
-    return false;
-  }
+  if (!BOT_TOKEN || !ADMIN_ID) return false;
   const text = [
     `🛒 Новая заявка`,
     `📍 Источник: ${sourceLabel(source)}`,
@@ -308,24 +292,19 @@ async function sendTelegram({ plan, contacts, source = 'landing' }) {
     `  📞 Телефон: ${contacts.phone || '—'}`,
     `  📧 Email: ${contacts.email || '—'}`,
   ].join('\n');
-
-  const res = await fetch(
-    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
-    }
-  );
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: ADMIN_ID, text }),
+  });
   const data = await res.json();
   if (!data.ok) console.error('[TG] Ошибка:', data.description);
   return data.ok;
 }
 
-// ───── Telegram уведомление о новом лиде ─────────────────────────────────────
+// ───── Уведомление о лиде ────────────────────────────────────────────────────
 async function sendLeadTelegram(data) {
   if (!BOT_TOKEN || !ADMIN_ID) return false;
-
   const text = [
     `📋 Новый лид с анкеты лендинга`,
     ``,
@@ -342,15 +321,11 @@ async function sendLeadTelegram(data) {
     `🎯 Главная проблема: ${translateValue(data.priority_problem)}`,
     `🏆 Цели: ${translateValue(data.main_goals)}`,
   ].join('\n');
-
-  const res = await fetch(
-    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
-    }
-  );
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: ADMIN_ID, text }),
+  });
   const json = await res.json();
   if (!json.ok) console.error('[TG-LEAD] Ошибка:', json.description);
   return json.ok;
@@ -368,17 +343,10 @@ const SHEET1_HEADERS = [
 async function appendLeadToSheets(data) {
   const sheets = getSheetsClient();
   if (!sheets) return;
-
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
-
-  const meta = await sheets.spreadsheets.values.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: 'Sheet1!A1:T1',
-  });
+  const meta = await sheets.spreadsheets.values.get({ spreadsheetId: GOOGLE_SHEET_ID, range: 'Sheet1!A1:T1' });
   const existingHeaders = meta.data.values?.[0] || [];
-  const needsHeaders = existingHeaders.length === 0 ||
-    SHEET1_HEADERS.some((h, i) => existingHeaders[i] !== h);
-
+  const needsHeaders = existingHeaders.length === 0 || SHEET1_HEADERS.some((h, i) => existingHeaders[i] !== h);
   if (needsHeaders) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
@@ -386,97 +354,117 @@ async function appendLeadToSheets(data) {
       valueInputOption: 'RAW',
       requestBody: { values: [SHEET1_HEADERS] },
     });
-    console.log('[SHEETS] Заголовки Sheet1 обновлены');
   }
-
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: 'Sheet1!A:T',
     valueInputOption: 'RAW',
     requestBody: {
       values: [[
-        date,
-        'landing',
-        data.name                           || '',
-        data.phone                          || '',
-        data.email                          || '',
-        normalizeSegment(data.segment),
-        formatScore(data.score),
-        data.profile                        || '',
-        translateValue(data.age_group),
-        translateValue(data.occupation),
-        formatScale(data.stress_level),
-        formatScale(data.sleep_quality),
-        translateValue(data.breathing_method),
-        translateValue(data.breathing_experience),
-        translateValue(data.current_problems),
-        translateValue(data.priority_problem),
-        translateValue(data.main_goals),
-        translateValue(data.time_commitment),
-        translateValue(data.format_preferences),
-        translateValue(data.chronic_conditions),
+        date, 'landing',
+        data.name || '', data.phone || '', data.email || '',
+        normalizeSegment(data.segment), formatScore(data.score), data.profile || '',
+        translateValue(data.age_group), translateValue(data.occupation),
+        formatScale(data.stress_level), formatScale(data.sleep_quality),
+        translateValue(data.breathing_method), translateValue(data.breathing_experience),
+        translateValue(data.current_problems), translateValue(data.priority_problem),
+        translateValue(data.main_goals), translateValue(data.time_commitment),
+        translateValue(data.format_preferences), translateValue(data.chronic_conditions),
       ]],
     },
   });
   console.log('[SHEETS] Лид записан:', data.name);
 }
 
+// ───── GET /get-reviews — отдаёт одобренные отзывы на сайт ───────────────────
+// Колонки листа reviews:
+// A=Дата  B=Имя  C=Telegram  D=Оценка  E=Отзыв
+// F=Улучшение сна  G=Снижение стресса  H=Повышение энергии
+// I=Статус  J=Аватар URL  K=Фото URL
+app.get('/get-reviews', async (req, res) => {
+  const sheets = getSheetsClient();
+  if (!sheets) return res.json([]);
+
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: 'reviews!A2:K',
+    });
+
+    const rows = response.data.values || [];
+
+    const approved = rows
+      .filter(row => String(row[8] || '').toLowerCase().trim() === 'одобрен')
+      .map((row, idx) => ({
+        id:               `sheet_${idx}`,
+        date:             row[0]  || '',
+        name:             row[1]  || '',
+        telegramUsername: row[2]  || '',
+        rating:           Number(row[3]) || 5,
+        content:          row[4]  || '',
+        fullContent:      row[4]  || '',
+        results: {
+          'улучшение сна':     row[5] || '0%',
+          'снижение стресса':  row[6] || '0%',
+          'повышение энергии': row[7] || '0%',
+        },
+        avatar:           row[9]  || null,
+        image:            row[10] || '',
+        verified:         true,
+      }));
+
+    console.log(`[GET-REVIEWS] Отдаём ${approved.length} одобренных отзывов`);
+    res.json(approved);
+  } catch (e) {
+    console.error('[GET-REVIEWS] Ошибка:', e.message);
+    res.json([]);
+  }
+});
+
 // ───── POST /notify ───────────────────────────────────────────────────────────
 app.post('/notify', async (req, res) => {
   const { plan, contacts, source = 'landing' } = req.body;
-
   if (!plan?.title || !contacts?.telegram) {
     return res.status(400).json({ ok: false, error: 'Missing plan.title or contacts.telegram' });
   }
-
   const [tgResult, sheetsResult] = await Promise.allSettled([
     sendTelegram({ plan, contacts, source }),
     appendToSheets({ plan, contacts, source }),
   ]);
-
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
   if (tgResult.status === 'rejected')     console.error('[NOTIFY] Telegram error:', tgResult.reason?.message);
   if (sheetsResult.status === 'rejected') console.error('[NOTIFY] Sheets error:',   sheetsResult.reason?.message);
-
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
-// ───── POST /notify-lead (лиды с анкеты лендинга) ────────────────────────────
+// ───── POST /notify-lead ──────────────────────────────────────────────────────
 app.post('/notify-lead', async (req, res) => {
   const { name } = req.body;
-
-  if (!name) {
-    return res.status(400).json({ ok: false, error: 'Missing name' });
-  }
-
+  if (!name) return res.status(400).json({ ok: false, error: 'Missing name' });
   const [tgResult, sheetsResult] = await Promise.allSettled([
     sendLeadTelegram(req.body),
     appendLeadToSheets(req.body),
   ]);
-
   const tgOk = tgResult.status === 'fulfilled' && tgResult.value === true;
   if (tgResult.status === 'rejected')     console.error('[NOTIFY-LEAD] Telegram error:', tgResult.reason?.message);
   if (sheetsResult.status === 'rejected') console.error('[NOTIFY-LEAD] Sheets error:',   sheetsResult.reason?.message);
-
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
 // ───── POST /submit-review ────────────────────────────────────────────────────
 app.post('/submit-review', async (req, res) => {
   const { name, content } = req.body;
-
   if (!name || !content) {
     return res.status(400).json({ ok: false, error: 'Missing name or content' });
   }
-
   const { telegramUsername, rating, results } = req.body;
-
   const stars = '★'.repeat(Number(rating) || 5) + '☆'.repeat(5 - (Number(rating) || 5));
+  const tgLink = telegramUsername ? `https://t.me/${telegramUsername.replace('@', '')}` : null;
   const text = [
     `⭐ Новый отзыв — на модерации`,
     ``,
     `👤 Имя: ${name}`,
-    `📱 Telegram: ${telegramUsername || '—'}`,
+    telegramUsername ? `📱 Telegram: ${telegramUsername} ${tgLink}` : `📱 Telegram: —`,
     `🌟 Оценка: ${stars}`,
     ``,
     `💬 Отзыв:`,
@@ -488,7 +476,6 @@ app.post('/submit-review', async (req, res) => {
     `  ⚡ Повышение энергии: ${results?.['повышение энергии'] || '0%'}`,
   ].join('\n');
 
-  // Сначала записываем в Sheets чтобы получить rowIndex
   let rowIndex = null;
   try {
     rowIndex = await appendReviewToSheets(req.body);
@@ -496,7 +483,6 @@ app.post('/submit-review', async (req, res) => {
     console.error('[REVIEW] Sheets error:', e.message);
   }
 
-  // Отправляем уведомление с кнопками модерации
   const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
   if (token && ADMIN_ID && rowIndex) {
     try {
@@ -525,11 +511,10 @@ app.post('/submit-review', async (req, res) => {
   res.json({ ok: true, status: 'pending_moderation' });
 });
 
-// ───── POST /tg-webhook — обработка кнопок модерации ─────────────────────────
+// ───── POST /tg-webhook ───────────────────────────────────────────────────────
 app.post('/tg-webhook', async (req, res) => {
   const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
 
-  // ── Обработка нажатий inline-кнопок ──────────────────────────────────────
   const cb = req.body?.callback_query;
   if (cb) {
     const [action, rowIndex] = cb.data.split('_');
@@ -561,7 +546,7 @@ app.post('/tg-webhook', async (req, res) => {
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: ADMIN_ID, text: `✅ Отзыв (строка ${rowIndex}) одобрен и опубликован` }),
+        body: JSON.stringify({ chat_id: ADMIN_ID, text: `✅ Отзыв (строка ${rowIndex}) одобрен и опубликован на сайте` }),
       });
     }
 
@@ -615,7 +600,6 @@ app.post('/tg-webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // ── Обработка текстовых сообщений (режим редактирования) ─────────────────
   const msg = req.body?.message;
   if (msg && msg.text && String(msg.from?.id) === String(ADMIN_ID)) {
     const session = editSessions.get(String(msg.from.id));
@@ -635,22 +619,19 @@ app.post('/tg-webhook', async (req, res) => {
     if (session) {
       const { rowIndex } = session;
       const sheets = getSheetsClient();
-
       if (sheets) {
-        await sheets.spreadsheets.values.batchUpdate({
+        await sheets.spreadsheets.batchUpdate({
           spreadsheetId: GOOGLE_SHEET_ID,
           requestBody: {
             valueInputOption: 'RAW',
             data: [
-              { range: `reviews!E${rowIndex}`, values: [[msg.text]] },   // текст отзыва
-              { range: `reviews!I${rowIndex}`, values: [['одобрен']] },  // статус
+              { range: `reviews!E${rowIndex}`, values: [[msg.text]] },
+              { range: `reviews!I${rowIndex}`, values: [['одобрен']] },
             ],
           },
         });
       }
-
       editSessions.delete(String(msg.from.id));
-
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
