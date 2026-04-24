@@ -21,6 +21,7 @@ app.use(cors({
 
 // ───── Переменные окружения ───────────────────────────────────────────────────
 const BOT_TOKEN        = process.env.BOT_TOKEN;
+const BOT_TOKEN_OTZIV  = process.env.BOT_TOKEN_OTZIV;   // ← бот отзывов
 const ADMIN_ID         = process.env.ADMIN_ID;
 const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
@@ -193,8 +194,61 @@ async function ensurePurchasesSheet(sheets) {
   }
 }
 
+// ───── Создать лист reviews если не существует ────────────────────────────────
+async function ensureReviewsSheet(sheets) {
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: GOOGLE_SHEET_ID });
+    const exists = meta.data.sheets.some(s => s.properties.title === 'reviews');
+    if (!exists) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'reviews' } } }] },
+      });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: 'reviews!A1:K1',
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [['Дата', 'Имя', 'Telegram', 'Оценка', 'Отзыв', 'Улучшение сна', 'Снижение стресса', 'Повышение энергии', 'Статус', 'Аватар URL', 'Фото URL']],
+        },
+      });
+      console.log('[SHEETS] Лист reviews создан');
+    }
+  } catch (e) {
+    console.error('[SHEETS] ensureReviewsSheet error:', e.message);
+  }
+}
+
+// ───── Записать отзыв в лист reviews ─────────────────────────────────────────
+async function appendReviewToSheets(data) {
+  const sheets = getSheetsClient();
+  if (!sheets) return;
+  await ensureReviewsSheet(sheets);
+  const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'reviews!A:K',
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [[
+        date,
+        data.name             || '',
+        data.telegramUsername || '',
+        data.rating           || 5,
+        data.content          || '',
+        data.results?.['улучшение сна']     || '0%',
+        data.results?.['снижение стресса']  || '0%',
+        data.results?.['повышение энергии'] || '0%',
+        'на модерации',
+        '', // аватар URL — пока пусто
+        '', // фото URL — пока пусто
+      ]],
+    },
+  });
+  console.log('[SHEETS] Отзыв записан от:', data.name);
+}
+
 // ───── Записать заявку в Sheets ───────────────────────────────────────────────
-// source — необязательный параметр, по умолчанию 'landing'
 async function appendToSheets({ plan, contacts, source = 'landing' }) {
   const sheets = getSheetsClient();
   if (!sheets) {
@@ -215,7 +269,7 @@ async function appendToSheets({ plan, contacts, source = 'landing' }) {
         contacts.telegram || '',
         contacts.phone    || '',
         contacts.email    || '',
-        source,           // ← теперь берём из запроса
+        source,
         'новая',
       ]],
     },
@@ -394,24 +448,79 @@ app.post('/notify-lead', async (req, res) => {
   res.json({ ok: tgOk, sheets: sheetsResult.status === 'fulfilled' });
 });
 
+// ───── POST /submit-review ────────────────────────────────────────────────────
+app.post('/submit-review', async (req, res) => {
+  const { name, content } = req.body;
+
+  if (!name || !content) {
+    return res.status(400).json({ ok: false, error: 'Missing name or content' });
+  }
+
+  const { telegramUsername, rating, results } = req.body;
+
+  const stars = '★'.repeat(Number(rating) || 5) + '☆'.repeat(5 - (Number(rating) || 5));
+  const text = [
+    `⭐ Новый отзыв — на модерации`,
+    ``,
+    `👤 Имя: ${name}`,
+    `📱 Telegram: ${telegramUsername || '—'}`,
+    `🌟 Оценка: ${stars}`,
+    ``,
+    `💬 Отзыв:`,
+    content,
+    ``,
+    `📊 Результаты:`,
+    `  💤 Улучшение сна: ${results?.['улучшение сна'] || '0%'}`,
+    `  🧘 Снижение стресса: ${results?.['снижение стресса'] || '0%'}`,
+    `  ⚡ Повышение энергии: ${results?.['повышение энергии'] || '0%'}`,
+    ``,
+    `📋 Одобрить / отклонить → Google Таблица, лист reviews`,
+  ].join('\n');
+
+  const sendReviewNotify = async () => {
+    const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
+    if (!token || !ADMIN_ID) return false;
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
+    });
+    const json = await r.json();
+    if (!json.ok) console.error('[REVIEW-TG] Ошибка:', json.description);
+    return json.ok;
+  };
+
+  const [tgResult, sheetsResult] = await Promise.allSettled([
+    sendReviewNotify(),
+    appendReviewToSheets(req.body),
+  ]);
+
+  if (tgResult.status === 'rejected')     console.error('[REVIEW] TG error:', tgResult.reason?.message);
+  if (sheetsResult.status === 'rejected') console.error('[REVIEW] Sheets error:', sheetsResult.reason?.message);
+
+  res.json({ ok: true, status: 'pending_moderation' });
+});
+
 // ───── GET /health ────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: {
-      bot:    !!BOT_TOKEN,
-      admin:  !!ADMIN_ID,
-      sheets: !!GOOGLE_SHEET_ID,
-      sa:     !!process.env.GOOGLE_SERVICE_ACCOUNT,
+      bot:        !!BOT_TOKEN,
+      bot_otziv:  !!BOT_TOKEN_OTZIV,
+      admin:      !!ADMIN_ID,
+      sheets:     !!GOOGLE_SHEET_ID,
+      sa:         !!process.env.GOOGLE_SERVICE_ACCOUNT,
     },
   });
 });
 
 app.listen(PORT, () => {
   console.log(`[SERVER] Прокси запущен на порту ${PORT}`);
-  console.log(`[SERVER] URL:      https://buteyko-api.bothost.tech`);
-  console.log(`[SERVER] Telegram: ${BOT_TOKEN ? '✅' : '❌ не задан'}`);
-  console.log(`[SERVER] Sheets:   ${GOOGLE_SHEET_ID ? '✅' : '❌ не задан'}`);
-  console.log(`[SERVER] SA JSON:  ${process.env.GOOGLE_SERVICE_ACCOUNT ? '✅' : '❌ не задан'}`);
+  console.log(`[SERVER] URL:         https://buteyko-api.bothost.tech`);
+  console.log(`[SERVER] BOT_TOKEN:   ${BOT_TOKEN       ? '✅' : '❌ не задан'}`);
+  console.log(`[SERVER] BOT_OTZIV:   ${BOT_TOKEN_OTZIV ? '✅' : '❌ не задан'}`);
+  console.log(`[SERVER] Sheets:      ${GOOGLE_SHEET_ID  ? '✅' : '❌ не задан'}`);
+  console.log(`[SERVER] SA JSON:     ${process.env.GOOGLE_SERVICE_ACCOUNT ? '✅' : '❌ не задан'}`);
 });
