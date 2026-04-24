@@ -26,6 +26,10 @@ const ADMIN_ID         = process.env.ADMIN_ID;
 const GOOGLE_SHEET_ID  = process.env.GOOGLE_SHEET_ID;
 const PORT             = process.env.PORT || 3001;
 
+// ───── Сессии редактирования отзывов (в памяти) ───────────────────────────────
+// Map: adminId → { rowIndex }
+const editSessions = new Map();
+
 // ───── Сегменты — единый формат для бота и лендинга ─────────────────────────
 const SEGMENT_LABELS = {
   severe:   '🔥 Горячий — выраженные нарушения',
@@ -219,11 +223,19 @@ async function ensureReviewsSheet(sheets) {
   }
 }
 
-// ───── Записать отзыв в лист reviews ─────────────────────────────────────────
+// ───── Записать отзыв в лист reviews, вернуть номер строки ───────────────────
 async function appendReviewToSheets(data) {
   const sheets = getSheetsClient();
-  if (!sheets) return;
+  if (!sheets) return null;
   await ensureReviewsSheet(sheets);
+
+  // Узнаём сколько строк уже есть чтобы вернуть rowIndex
+  const countRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'reviews!A:A',
+  });
+  const rowIndex = (countRes.data.values?.length || 1) + 1;
+
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
@@ -240,12 +252,13 @@ async function appendReviewToSheets(data) {
         data.results?.['снижение стресса']  || '0%',
         data.results?.['повышение энергии'] || '0%',
         'на модерации',
-        '', // аватар URL — пока пусто
-        '', // фото URL — пока пусто
+        '',
+        '',
       ]],
     },
   });
-  console.log('[SHEETS] Отзыв записан от:', data.name);
+  console.log('[SHEETS] Отзыв записан от:', data.name, '| строка:', rowIndex);
+  return rowIndex;
 }
 
 // ───── Записать заявку в Sheets ───────────────────────────────────────────────
@@ -473,32 +486,183 @@ app.post('/submit-review', async (req, res) => {
     `  💤 Улучшение сна: ${results?.['улучшение сна'] || '0%'}`,
     `  🧘 Снижение стресса: ${results?.['снижение стресса'] || '0%'}`,
     `  ⚡ Повышение энергии: ${results?.['повышение энергии'] || '0%'}`,
-    ``,
-    `📋 Одобрить / отклонить → Google Таблица, лист reviews`,
   ].join('\n');
 
-  const sendReviewNotify = async () => {
-    const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
-    if (!token || !ADMIN_ID) return false;
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_ID, text }),
-    });
-    const json = await r.json();
-    if (!json.ok) console.error('[REVIEW-TG] Ошибка:', json.description);
-    return json.ok;
-  };
+  // Сначала записываем в Sheets чтобы получить rowIndex
+  let rowIndex = null;
+  try {
+    rowIndex = await appendReviewToSheets(req.body);
+  } catch (e) {
+    console.error('[REVIEW] Sheets error:', e.message);
+  }
 
-  const [tgResult, sheetsResult] = await Promise.allSettled([
-    sendReviewNotify(),
-    appendReviewToSheets(req.body),
-  ]);
-
-  if (tgResult.status === 'rejected')     console.error('[REVIEW] TG error:', tgResult.reason?.message);
-  if (sheetsResult.status === 'rejected') console.error('[REVIEW] Sheets error:', sheetsResult.reason?.message);
+  // Отправляем уведомление с кнопками модерации
+  const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
+  if (token && ADMIN_ID && rowIndex) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: ADMIN_ID,
+          text,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Одобрить',       callback_data: `approve_${rowIndex}` },
+              { text: '✏️ Редактировать',  callback_data: `edit_${rowIndex}`    },
+              { text: '❌ Отклонить',      callback_data: `reject_${rowIndex}`  },
+            ]],
+          },
+        }),
+      });
+      const json = await r.json();
+      if (!json.ok) console.error('[REVIEW-TG] Ошибка:', json.description);
+    } catch (e) {
+      console.error('[REVIEW-TG] fetch error:', e.message);
+    }
+  }
 
   res.json({ ok: true, status: 'pending_moderation' });
+});
+
+// ───── POST /tg-webhook — обработка кнопок модерации ─────────────────────────
+app.post('/tg-webhook', async (req, res) => {
+  const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
+
+  // ── Обработка нажатий inline-кнопок ──────────────────────────────────────
+  const cb = req.body?.callback_query;
+  if (cb) {
+    const [action, rowIndex] = cb.data.split('_');
+    const sheets = getSheetsClient();
+
+    if (action === 'approve') {
+      if (sheets) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: `reviews!I${rowIndex}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [['одобрен']] },
+        });
+      }
+      await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: '✅ Отзыв одобрен' }),
+      });
+      await fetch(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: cb.message.chat.id,
+          message_id: cb.message.message_id,
+          reply_markup: { inline_keyboard: [] },
+        }),
+      });
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: ADMIN_ID, text: `✅ Отзыв (строка ${rowIndex}) одобрен и опубликован` }),
+      });
+    }
+
+    else if (action === 'reject') {
+      if (sheets) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: `reviews!I${rowIndex}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [['отклонён']] },
+        });
+      }
+      await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: '❌ Отзыв отклонён' }),
+      });
+      await fetch(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: cb.message.chat.id,
+          message_id: cb.message.message_id,
+          reply_markup: { inline_keyboard: [] },
+        }),
+      });
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: ADMIN_ID, text: `❌ Отзыв (строка ${rowIndex}) отклонён` }),
+      });
+    }
+
+    else if (action === 'edit') {
+      editSessions.set(String(cb.from.id), { rowIndex });
+      await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id, text: '✏️ Жду исправленный текст...' }),
+      });
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: ADMIN_ID,
+          text: `✏️ Напишите исправленный текст отзыва одним сообщением:\n\n(для отмены отправьте /cancel)`,
+        }),
+      });
+    }
+
+    return res.sendStatus(200);
+  }
+
+  // ── Обработка текстовых сообщений (режим редактирования) ─────────────────
+  const msg = req.body?.message;
+  if (msg && msg.text && String(msg.from?.id) === String(ADMIN_ID)) {
+    const session = editSessions.get(String(msg.from.id));
+
+    if (msg.text === '/cancel') {
+      if (session) {
+        editSessions.delete(String(msg.from.id));
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: ADMIN_ID, text: '↩️ Редактирование отменено' }),
+        });
+      }
+      return res.sendStatus(200);
+    }
+
+    if (session) {
+      const { rowIndex } = session;
+      const sheets = getSheetsClient();
+
+      if (sheets) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: [
+              { range: `reviews!E${rowIndex}`, values: [[msg.text]] },   // текст отзыва
+              { range: `reviews!I${rowIndex}`, values: [['одобрен']] },  // статус
+            ],
+          },
+        });
+      }
+
+      editSessions.delete(String(msg.from.id));
+
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: ADMIN_ID,
+          text: `✅ Отзыв (строка ${rowIndex}) отредактирован и одобрен`,
+        }),
+      });
+    }
+  }
+
+  res.sendStatus(200);
 });
 
 // ───── GET /health ────────────────────────────────────────────────────────────
