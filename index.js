@@ -206,7 +206,11 @@ async function ensureReviewsSheet(sheets) {
         range: 'reviews!A1:K1',
         valueInputOption: 'RAW',
         requestBody: {
-          values: [['Дата', 'Имя', 'Telegram', 'Оценка', 'Отзыв', 'Улучшение сна', 'Снижение стресса', 'Повышение энергии', 'Статус', 'Аватар URL', 'Фото URL']],
+          values: [[
+            'Дата', 'Имя', 'Telegram', 'Оценка', 'Отзыв',
+            'Симптомы / с чем пришли', '', '',
+            'Статус', 'Аватар URL', 'Фото URL',
+          ]],
         },
       });
     }
@@ -228,6 +232,10 @@ async function appendReviewToSheets(data) {
   const rowIndex = (countRes.data.values?.length || 1) + 1;
 
   const date = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' });
+  const conditionsText = Array.isArray(data.conditions)
+    ? data.conditions.filter(Boolean).join(', ')
+    : (data.conditions || '');
+
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: 'reviews!A:K',
@@ -239,9 +247,9 @@ async function appendReviewToSheets(data) {
         data.telegramUsername || '',
         data.rating           || 5,
         data.content          || '',
-        data.results?.['улучшение сна']     || '0%',
-        data.results?.['снижение стресса']  || '0%',
-        data.results?.['повышение энергии'] || '0%',
+        conditionsText,
+        '',
+        '',
         'на модерации',
         '',
         '',
@@ -379,7 +387,7 @@ async function appendLeadToSheets(data) {
 // ───── GET /get-reviews — отдаёт одобренные отзывы на сайт ───────────────────
 // Колонки листа reviews:
 // A=Дата  B=Имя  C=Telegram  D=Оценка  E=Отзыв
-// F=Улучшение сна  G=Снижение стресса  H=Повышение энергии
+// F=Симптомы / с чем пришли
 // I=Статус  J=Аватар URL  K=Фото URL
 app.get('/get-reviews', async (req, res) => {
   const sheets = getSheetsClient();
@@ -403,11 +411,9 @@ app.get('/get-reviews', async (req, res) => {
         rating:           Number(row[3]) || 5,
         content:          row[4]  || '',
         fullContent:      row[4]  || '',
-        results: {
-          'улучшение сна':     row[5] || '0%',
-          'снижение стресса':  row[6] || '0%',
-          'повышение энергии': row[7] || '0%',
-        },
+        conditions:       row[5]
+          ? row[5].split(',').map(s => s.trim()).filter(Boolean)
+          : [],
         avatar:           row[9]  || null,
         image:            row[10] || '',
         verified:         true,
@@ -453,13 +459,17 @@ app.post('/notify-lead', async (req, res) => {
 
 // ───── POST /submit-review ────────────────────────────────────────────────────
 app.post('/submit-review', async (req, res) => {
-  const { name, content } = req.body;
+  const { name, content, telegramUsername, rating, conditions } = req.body;
   if (!name || !content) {
     return res.status(400).json({ ok: false, error: 'Missing name or content' });
   }
-  const { telegramUsername, rating, results } = req.body;
+
   const stars = '★'.repeat(Number(rating) || 5) + '☆'.repeat(5 - (Number(rating) || 5));
   const tgLink = telegramUsername ? `https://t.me/${telegramUsername.replace('@', '')}` : null;
+  const conditionsText = Array.isArray(conditions) && conditions.length
+    ? conditions.join(', ')
+    : '—';
+
   const text = [
     `⭐ Новый отзыв — на модерации`,
     ``,
@@ -467,13 +477,10 @@ app.post('/submit-review', async (req, res) => {
     telegramUsername ? `📱 Telegram: ${telegramUsername} ${tgLink}` : `📱 Telegram: —`,
     `🌟 Оценка: ${stars}`,
     ``,
+    `🏷 С чем пришёл(а): ${conditionsText}`,
+    ``,
     `💬 Отзыв:`,
     content,
-    ``,
-    `📊 Результаты:`,
-    `  💤 Улучшение сна: ${results?.['улучшение сна'] || '0%'}`,
-    `  🧘 Снижение стресса: ${results?.['снижение стресса'] || '0%'}`,
-    `  ⚡ Повышение энергии: ${results?.['повышение энергии'] || '0%'}`,
   ].join('\n');
 
   let rowIndex = null;
