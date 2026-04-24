@@ -384,11 +384,7 @@ async function appendLeadToSheets(data) {
   console.log('[SHEETS] Лид записан:', data.name);
 }
 
-// ───── GET /get-reviews — отдаёт одобренные отзывы на сайт ───────────────────
-// Колонки листа reviews:
-// A=Дата  B=Имя  C=Telegram  D=Оценка  E=Отзыв
-// F=Симптомы / с чем пришли
-// I=Статус  J=Аватар URL  K=Фото URL
+// ───── GET /get-reviews ───────────────────────────────────────────────────────
 app.get('/get-reviews', async (req, res) => {
   const sheets = getSheetsClient();
   if (!sheets) return res.json([]);
@@ -627,7 +623,8 @@ app.post('/tg-webhook', async (req, res) => {
       const { rowIndex } = session;
       const sheets = getSheetsClient();
       if (sheets) {
-        await sheets.spreadsheets.batchUpdate({
+        // ИСПРАВЛЕНО: values.batchUpdate вместо batchUpdate
+        await sheets.spreadsheets.values.batchUpdate({
           spreadsheetId: GOOGLE_SHEET_ID,
           requestBody: {
             valueInputOption: 'RAW',
