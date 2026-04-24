@@ -623,7 +623,6 @@ app.post('/tg-webhook', async (req, res) => {
       const { rowIndex } = session;
       const sheets = getSheetsClient();
       if (sheets) {
-        // ИСПРАВЛЕНО: values.batchUpdate вместо batchUpdate
         await sheets.spreadsheets.values.batchUpdate({
           spreadsheetId: GOOGLE_SHEET_ID,
           requestBody: {
@@ -673,15 +672,25 @@ app.listen(PORT, () => {
   console.log(`[SERVER] Sheets:      ${GOOGLE_SHEET_ID  ? '✅' : '❌ не задан'}`);
   console.log(`[SERVER] SA JSON:     ${process.env.GOOGLE_SERVICE_ACCOUNT ? '✅' : '❌ не задан'}`);
 
-  // Автоустановка webhook при старте
+  // Автоустановка webhook при старте (POST + полное логирование)
   const WEBHOOK_URL = 'https://buteyko-api.bothost.tech/tg-webhook';
   const token = BOT_TOKEN_OTZIV || BOT_TOKEN;
   if (token) {
-    fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${WEBHOOK_URL}`)
+    fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: WEBHOOK_URL }),
+    })
       .then(r => r.json())
-      .then(d => console.log('[WEBHOOK] Установлен:', d.ok))
-      .catch(e => console.error('[WEBHOOK] Ошибка:', e.message));
+      .then(d => {
+        if (d.ok) {
+          console.log('[WEBHOOK] ✅ Установлен:', d.description);
+        } else {
+          console.error(`[WEBHOOK] ❌ Ошибка ${d.error_code}: ${d.description}`);
+        }
+      })
+      .catch(e => console.error('[WEBHOOK] 🔴 fetch ошибка:', e.message));
   } else {
-    console.log('[WEBHOOK] Токен не найден, webhook не установлен');
+    console.log('[WEBHOOK] ⚠️ Токен не найден, webhook не установлен');
   }
 });
